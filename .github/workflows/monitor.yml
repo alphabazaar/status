@@ -1,0 +1,47 @@
+name: Production Monitor
+
+# Uptime and data-freshness checks against alphabazaar.ai (public endpoints only, no secrets). On failure it opens
+# or updates ONE issue labeled `monitor` in this repository; when everything passes again it comments and closes it.
+# Checks and thresholds: scripts/monitor/monitor.py. A public repository, so the minutes are free.
+# Scheduled runs only fire from the default branch (main). GitHub registers the schedule when this file changes on main.
+
+on:
+  schedule:
+    - cron: "7 * * * 1-5"     # hourly on weekdays (UTC)
+    - cron: "7 */3 * * 0,6"   # every 3 hours on weekends
+  workflow_dispatch:
+    inputs:
+      fail_url:
+        description: "Test only: also check this URL, which should fail (proves the issue is opened)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Report only: don't open, update or close the monitor issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read   # checkout of scripts/monitor
+  issues: write    # the monitor issue
+
+concurrency:
+  group: production-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: scripts/monitor
+          persist-credentials: false
+
+      - name: Check production
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MONITOR_FAIL_URL: ${{ inputs.fail_url }}
+          MONITOR_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          MONITOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 scripts/monitor/monitor.py
