@@ -57,6 +57,8 @@ class TestThresholds:
 
     def test_home_needs_the_headline(self):
         assert monitor.eval_home(200, "<h1>Receipts for market calls.</h1>").ok
+        assert monitor.eval_home(200, "<h1>Practice trading stocks. Free.</h1>").ok
+        assert monitor.eval_home(200, "<p>Receipts for every trade</p>").ok
         assert not monitor.eval_home(200, "<h1>Something else</h1>").ok
         assert not monitor.eval_home(500, "").ok
 
@@ -214,3 +216,40 @@ def test_run_checks_retries_failures_once(monkeypatch):
     results = monitor.run_checks(NOW, retry_delay=1)
     assert calls["flaky"] == 2
     assert all(r.ok for r in results)
+
+
+class TestArenaConsistency:
+    ROW = {"username": "a", "wins": 11, "losses": 7, "closed_wins": 4, "closed_losses": 2, "open_signals": 12,
+           "signals": 18, "ranked": True, "rank": 1, "avg_return": 0.7}
+
+    def payload(self, *rows, basis=None):
+        season = {"min_signals": 10, **({"scoring_basis": basis} if basis else {})}
+        return {"season": season, "standings": list(rows)}
+
+    def test_a_consistent_board_passes(self):
+        second = dict(self.ROW, username="b", rank=2, avg_return=0.5)
+        assert monitor.eval_arena_consistency(200, self.payload(self.ROW, second)).ok
+
+    def test_closed_plus_open_must_add_up(self):
+        waiting = dict(self.ROW, open_signals=13)  # one trade waiting for the next open isn't scored yet
+        assert monitor.eval_arena_consistency(200, self.payload(waiting)).ok
+        bad = dict(self.ROW, open_signals=5)
+        r = monitor.eval_arena_consistency(200, self.payload(bad))
+        assert not r.ok and "closed" in r.detail
+
+    def test_closed_only_scores_closed_trades(self):
+        row = dict(self.ROW, wins=4, losses=2, signals=10)
+        assert monitor.eval_arena_consistency(200, self.payload(row, basis="closed_only")).ok
+        assert not monitor.eval_arena_consistency(200, self.payload(self.ROW, basis="closed_only")).ok
+
+    def test_ranked_below_minimum_and_rank_order(self):
+        low = dict(self.ROW, signals=3)
+        assert not monitor.eval_arena_consistency(200, self.payload(low)).ok
+        worse_first = dict(self.ROW, avg_return=0.1)
+        better_second = dict(self.ROW, username="b", rank=2, avg_return=0.9)
+        assert not monitor.eval_arena_consistency(200, self.payload(worse_first, better_second)).ok
+
+    def test_old_rows_without_new_fields_pass(self):
+        row = {k: v for k, v in self.ROW.items() if k not in ("closed_wins", "closed_losses", "open_signals")}
+        assert monitor.eval_arena_consistency(200, self.payload(row)).ok
+        assert not monitor.eval_arena_consistency(503, None).ok

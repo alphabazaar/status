@@ -58,7 +58,8 @@ PRICES_OPEN_GRACE = timedelta(minutes=20)   # after the open, before prices must
 BRIEF_DUE = dt_time(10, 0)                  # ET, trading days
 INSIDER_DUE = dt_time(12, 0)                # ET, trading days
 EXPECTED_MCP_TOOLS = 24
-HOME_TEXT = "Receipts for market calls"
+# Any one of these on the home page counts as "the real site is up" (the headline is being reworded)
+HOME_TEXTS = ("Receipts for market calls", "Receipts for every trade", "Practice trading stocks")
 REQUEST_TIMEOUT = 20
 
 
@@ -136,8 +137,8 @@ def eval_health(status: int, seconds: float) -> Result:
 def eval_home(status: int, text: str) -> Result:
     if status != 200:
         return fail("website home", f"HTTP {status or 'no response'}")
-    if HOME_TEXT not in (text or ""):
-        return fail("website home", f'200 but "{HOME_TEXT}" is missing')
+    if not any(t in (text or "") for t in HOME_TEXTS):
+        return fail("website home", "200 but none of the expected headlines is on the page")
     return ok("website home", "200")
 
 
@@ -170,6 +171,43 @@ def eval_leaderboard(status: int, payload: Any) -> Result:
     if not rows:
         return fail("leaderboard", "200 but no rows")
     return ok("leaderboard", f"{len(rows)} rows")
+
+
+def eval_arena_consistency(status: int, payload: Any) -> Result:
+    """The Arena standings agree with themselves (owner request #35, after bug #34): every row's closed record plus
+    its open trades adds up to the trades it's scored on, closed-only seasons score closed trades only, ranked players
+    meet the minimum, and ranks follow the average return."""
+    name = "arena data"
+    if status != 200 or not isinstance(payload, dict):
+        return fail(name, f"HTTP {status or 'no response'}")
+    season = payload.get("season") or {}
+    basis = season.get("scoring_basis") or payload.get("scoring_basis") or "mark_to_market"
+    minimum = season.get("min_signals") or 10
+    rows = payload.get("standings") or []
+    problems: List[str] = []
+    for row in rows:
+        who = row.get("username", "?")
+        cw, cl, op = row.get("closed_wins"), row.get("closed_losses"), row.get("open_signals")
+        wins, losses = row.get("wins") or 0, row.get("losses") or 0
+        if None not in (cw, cl, op):
+            if basis == "closed_only":
+                if (wins, losses) != (cw, cl):
+                    problems.append(f"{who}: {wins}-{losses} scored but {cw}-{cl} closed")
+            elif cw + cl > wins + losses or cw + cl + op < wins + losses:
+                # Open trades include ones waiting for the next open's price, which aren't scored yet, so closed + open
+                # can be more than the scored count, never less, and closed alone can't exceed it
+                problems.append(f"{who}: {cw}-{cl} closed + {op} open vs {wins + losses} scored")
+        if row.get("ranked") and (row.get("signals") or 0) < minimum:
+            problems.append(f"{who}: ranked with {row.get('signals')} trades (minimum {minimum})")
+    ranked = sorted((r for r in rows if r.get("ranked") and r.get("rank")), key=lambda r: r["rank"])
+    if [r["rank"] for r in ranked] != list(range(1, len(ranked) + 1)):
+        problems.append("ranks aren't 1..N")
+    returns = [r.get("avg_return") or 0 for r in ranked]
+    if any(a < b for a, b in zip(returns, returns[1:])):
+        problems.append("ranks don't follow average return")
+    if problems:
+        return fail(name, "; ".join(problems[:5]) + (f" (+{len(problems) - 5} more)" if len(problems) > 5 else ""))
+    return ok(name, f"{len(rows)} rows consistent ({basis})")
 
 
 def eval_digest_fresh(payload: Any, now: datetime) -> Result:
@@ -411,6 +449,11 @@ def check_arena(now: datetime) -> List[Result]:
     return [eval_status("arena seasons", status)]
 
 
+def check_arena_data(now: datetime) -> List[Result]:
+    status, _, payload = fetch_json(f"{API_BASE}/api/arena/standings?limit=50")
+    return [eval_arena_consistency(status, payload)]
+
+
 def check_skill(now: datetime) -> List[Result]:
     status, _, _, _ = fetch(f"{WWW_BASE}/skill.md")
     return [eval_status("skill.md", status)]
@@ -461,7 +504,7 @@ def check_insider(now: datetime) -> List[Result]:
 
 
 CHECKS: List[Callable[[datetime], List[Result]]] = [
-    check_health, check_home, check_digest, check_mcp, check_arena, check_skill, check_leaderboard,
+    check_health, check_home, check_digest, check_mcp, check_arena, check_arena_data, check_skill, check_leaderboard,
     check_pulse, check_prices, check_brief, check_insider,
 ]
 
