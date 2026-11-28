@@ -70,6 +70,7 @@ class TestThresholds:
     def test_mcp_tool_count(self):
         assert monitor.eval_mcp("Alpha Bazaar Arena", 24).ok
         assert not monitor.eval_mcp("Alpha Bazaar Arena", 23).ok
+        assert monitor.eval_mcp("Alpha Bazaar Arena", 26).ok  # new tools are fine
         assert not monitor.eval_mcp(None, 24).ok
         assert not monitor.eval_mcp(None, None, "initialize HTTP 500").ok
 

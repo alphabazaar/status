@@ -57,7 +57,7 @@ PRICES_MAX_AGE = timedelta(minutes=30)      # latest ticker_prices write, during
 PRICES_OPEN_GRACE = timedelta(minutes=20)   # after the open, before prices must be moving
 BRIEF_DUE = dt_time(10, 0)                  # ET, trading days
 INSIDER_DUE = dt_time(12, 0)                # ET, trading days
-EXPECTED_MCP_TOOLS = 24
+MIN_MCP_TOOLS = 24  # at least this many: new tools shouldn't page anyone, losing tools should
 # Any one of these on the home page counts as "the real site is up" (the headline is being reworded)
 HOME_TEXTS = ("Receipts for market calls", "Receipts for every trade", "Practice trading stocks")
 REQUEST_TIMEOUT = 20
@@ -159,8 +159,8 @@ def eval_mcp(server_name: Optional[str], tool_count: Optional[int], error: Optio
         return fail("mcp", error)
     if not server_name:
         return fail("mcp", "initialize returned no serverInfo")
-    if tool_count != EXPECTED_MCP_TOOLS:
-        return fail("mcp", f"{tool_count} tools (expected {EXPECTED_MCP_TOOLS})")
+    if tool_count is None or tool_count < MIN_MCP_TOOLS:
+        return fail("mcp", f"{tool_count} tools (expected at least {MIN_MCP_TOOLS})")
     return ok("mcp", f"{tool_count} tools")
 
 
